@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState, MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, MouseEvent } from 'react'
 import styled from 'styled-components'
+import DragDropImage from './DragDropImage'
 
 interface Size {
   width: number
@@ -12,14 +13,22 @@ interface Rectangle extends Size {
   rotate: number
 }
 
-const CANVAS_PADDING = 100
-const MODE: { [key: string]: 'none' | 'blur' | 'crop' | 'rotate' } = {
+const CANVAS_PADDING = 50
+const MODE: { [key in 'NONE' | 'BLUR' | 'CROP' | 'ROTATE']: 'none' | 'blur' | 'crop' | 'rotate' } = {
   NONE: 'none',
   BLUR: 'blur',
   CROP: 'crop',
   ROTATE: 'rotate',
 }
 // const ROTATE_ANGLE = 45
+
+const INIT_RECTANGLE: Rectangle = {
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+  rotate: 0,
+}
 
 export default function ImageCrop() {
   const canvasWrapper = useRef<HTMLDivElement>(null)
@@ -28,23 +37,11 @@ export default function ImageCrop() {
   const dragLayer = useRef<HTMLCanvasElement>(null)
 
   const [mode, setMode] = useState<'none' | 'blur' | 'crop' | 'rotate'>('none')
-  const [rotateAngle, setRotateAngle] = useState(0)
-  const [cropArea, setCropArea] = useState<Rectangle>({
-    x: 0,
-    y: 0,
-    width: 0,
-    height: 0,
-    rotate: 0,
-  })
+  const [rotateAngle] = useState(0)
+  const [cropArea, setCropArea] = useState<Rectangle>(INIT_RECTANGLE)
   const [cropAreas, setCropAreas] = useState<Rectangle[]>([])
 
-  const [blurArea, setBlurArea] = useState<Rectangle>({
-    x: 0,
-    y: 0,
-    width: 0,
-    height: 0,
-    rotate: 0,
-  })
+  const [blurArea, setBlurArea] = useState<Rectangle>(INIT_RECTANGLE)
   const [blurAreas, setBlurAreas] = useState<Rectangle[]>([])
 
   const [dragStart, setDragStart] = useState(false)
@@ -73,66 +70,107 @@ export default function ImageCrop() {
   // }, [rotateCanvas])
 
   const handleMouseDown = (e: MouseEvent<HTMLCanvasElement>) => {
-    if (mode !== MODE.CROP) return
+    if (mode === MODE.NONE) return
     const rect = dragLayer.current!.getBoundingClientRect()
     const { offsetX, offsetY } = e.nativeEvent
     setDragStart(true)
-    setCropArea((prev) => {
-      return {
-        ...prev,
+    if (mode === MODE.BLUR) {
+      setBlurArea({
+        ...INIT_RECTANGLE,
         x: (offsetX * originSize.current.width) / rect.width,
         y: (offsetY * originSize.current.height) / rect.height,
         rotate: rotateAngle,
-      }
-    })
-    const ctx = dragLayer.current!.getContext('2d')
-    if (!ctx) return
+      })
+      return
+    }
+    if (mode === MODE.CROP) {
+      setCropArea({
+        ...INIT_RECTANGLE,
+        x: (offsetX * originSize.current.width) / rect.width,
+        y: (offsetY * originSize.current.height) / rect.height,
+        rotate: rotateAngle,
+      })
+    }
   }
 
   const handleMouseMove = (e: MouseEvent<HTMLCanvasElement>) => {
-    if (mode !== MODE.CROP) return
     if (!dragStart) return
+    if (mode === MODE.NONE) return
     const rect = dragLayer.current!.getBoundingClientRect()
-    const ctx = dragLayer.current!.getContext('2d')
-    if (!ctx) return
     const { offsetX, offsetY } = e.nativeEvent
-
-    setCropArea((area) => ({
-      ...area,
-      width: (offsetX * originSize.current.width) / rect.width - area.x,
-      height: (offsetY * originSize.current.height) / rect.height - area.y,
-    }))
+    if (mode === MODE.BLUR) {
+      setBlurArea((area) => ({
+        ...area,
+        width: (offsetX * originSize.current.width) / rect.width - area.x,
+        height: (offsetY * originSize.current.height) / rect.height - area.y,
+      }))
+      return
+    }
+    if (mode === MODE.CROP) {
+      setCropArea((area) => ({
+        ...area,
+        width: (offsetX * originSize.current.width) / rect.width - area.x,
+        height: (offsetY * originSize.current.height) / rect.height - area.y,
+      }))
+      return
+    }
   }
 
   const handleMouseUp = () => {
-    if (mode !== MODE.CROP) return
     if (!dragStart) return
+    if (mode === MODE.NONE) return
     setDragStart(false)
-    setCropAreas((prev) => [...prev, cropArea])
-    setCropArea({
-      x: 0,
-      y: 0,
-      width: 0,
-      height: 0,
-      rotate: 0,
-    })
+    if (mode === MODE.CROP) {
+      if (cropArea.width !== 0) {
+        setCropAreas((prev) => [...prev, cropArea])
+      }
+      setCropArea(INIT_RECTANGLE)
+      return
+    }
+    if (mode === MODE.BLUR) {
+      if (blurArea.width !== 0) {
+        setBlurAreas((prev) => [...prev, blurArea])
+      }
+      setBlurArea(INIT_RECTANGLE)
+      return
+    }
   }
 
-  const drawDragArea = useCallback(() => {
+  const drawCropArea = useCallback(() => {
     const canvas = dragLayer.current
     const context = canvas?.getContext('2d')
     if (canvas) context?.clearRect(0, 0, canvas.width, canvas.height)
     if (!context) return
+    context.save()
     context.lineWidth = 2
     context.fillStyle = 'rgba(200, 200, 200, 0.8)'
-    context?.strokeRect(cropArea.x, cropArea.y, cropArea.width, cropArea.height)
+    context.strokeRect(cropArea.x, cropArea.y, cropArea.width, cropArea.height)
     context.fillStyle = 'rgba(200,200,200, 0.5)'
     context.fillRect(cropArea.x, cropArea.y, cropArea.width, cropArea.height)
+    context.restore()
   }, [cropArea])
 
+  const drawBlurArea = useCallback(() => {
+    const canvas = dragLayer.current
+    const context = canvas?.getContext('2d')
+    if (canvas) context?.clearRect(0, 0, canvas.width, canvas.height)
+    if (!context) return
+    context.save()
+    context.lineWidth = 2
+    context.fillStyle = 'rgba(200, 200, 200, 0.8)'
+    context.strokeRect(blurArea.x, blurArea.y, blurArea.width, blurArea.height)
+    context.fillStyle = 'rgba(200,200,200, 0.5)'
+    context.fillRect(blurArea.x, blurArea.y, blurArea.width, blurArea.height)
+    context.restore()
+  }, [blurArea])
+
   useEffect(() => {
-    drawDragArea()
-  }, [drawDragArea])
+    drawBlurArea()
+  }, [drawBlurArea])
+
+  useEffect(() => {
+    drawCropArea()
+  }, [drawCropArea])
 
   useEffect(() => {
     cropAreas.forEach((area) => {
@@ -146,6 +184,18 @@ export default function ImageCrop() {
     })
   }, [cropAreas])
 
+  useEffect(() => {
+    const blurContext = blurLayer.current?.getContext('2d')
+    const context = imageLayer.current?.getContext('2d')
+    if (!blurContext) return
+    if (!context) return
+    blurAreas.forEach((area) => {
+      const { x, y, width, height } = area
+      const imgData = blurContext.getImageData(x, y, width, height)
+      context.putImageData(imgData, x, y)
+    })
+  }, [blurAreas])
+
   // 이미지 캔버스에 그리는 useEffect
   useEffect(() => {
     const image = new Image()
@@ -154,10 +204,10 @@ export default function ImageCrop() {
       if (!blurLayer.current) return
       if (!dragLayer.current) return
       const ctx = imageLayer.current.getContext('2d')
-      if (!ctx) return
       const ctx2 = blurLayer.current.getContext('2d')
-      if (!ctx2) return
       const ctx3 = dragLayer.current.getContext('2d')
+      if (!ctx) return
+      if (!ctx2) return
       if (!ctx3) return
       ctx.clearRect(0, 0, imageLayer.current.width, imageLayer.current.height)
       ctx2.clearRect(0, 0, blurLayer.current.width, blurLayer.current.height)
@@ -166,6 +216,7 @@ export default function ImageCrop() {
       imageLayer.current.height = image.naturalHeight
       blurLayer.current.width = image.naturalWidth
       blurLayer.current.height = image.naturalHeight
+      ctx2.filter = 'blur(25px)'
       dragLayer.current.width = image.naturalWidth
       dragLayer.current.height = image.naturalHeight
       originSize.current = { width: image.naturalWidth, height: image.naturalHeight }
@@ -184,6 +235,7 @@ export default function ImageCrop() {
       dragLayer.current.style.width = `${isWidthLonger ? width : width * ratio}px`
       dragLayer.current.style.height = `${isWidthLonger ? height / ratio : width}px`
       ctx.drawImage(image, 0, 0)
+      ctx2.drawImage(image, 0, 0)
     }
     image.src = imgSrc
   }, [imgSrc])
@@ -206,10 +258,19 @@ export default function ImageCrop() {
               />
             </>
           ) : (
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
+            <DragDropImage
+              handleDrop={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                if (e.dataTransfer.files === null) return
+                const file = e.dataTransfer.files[0]
+                const isFileImage = file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/jpg'
+                if (!isFileImage) return
+                originFile.current = file
+                const imgUrl = URL.createObjectURL(file)
+                setImgSrc(imgUrl)
+              }}
+              handleChange={(e) => {
                 if (e.target.files === null) return
                 originFile.current = e.target.files[0]
                 const imgUrl = URL.createObjectURL(e.target.files?.[0])
@@ -220,34 +281,6 @@ export default function ImageCrop() {
         </Container>
       </div>
       <div>
-        {/* <button
-          onClick={() => {
-            setMode((prev) => {
-              if (prev === MODE.ROTATE) {
-                return MODE.NONE
-              }
-              return MODE.ROTATE
-            })
-          }}
-        >
-          Rotate
-        </button>
-        <button
-          disabled={mode !== MODE.ROTATE}
-          onClick={() => {
-            setRotateAngle((prev) => (prev - ROTATE_ANGLE) % 360)
-          }}
-        >
-          {'<'}
-        </button>
-        <button
-          disabled={mode !== MODE.ROTATE}
-          onClick={() => {
-            setRotateAngle((prev) => (prev + ROTATE_ANGLE) % 360)
-          }}
-        >
-          {'>'}
-        </button> */}
         <button
           disabled={originFile.current === null}
           onClick={() => {
@@ -292,7 +325,7 @@ export default function ImageCrop() {
               link.click()
             })
           }}
-          disabled={mode !== MODE.NONE || originFile.current === null}
+          disabled={mode !== MODE.NONE || originFile.current === null || cropAreas.length === 0}
         >
           save
         </button>
@@ -314,5 +347,4 @@ const Canvas = styled.canvas<{ rotate: number }>`
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%) rotate(${(props) => props.rotate}deg);
-  border: 1px solid black;
 `

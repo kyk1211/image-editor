@@ -28,8 +28,6 @@ export default function Test() {
               canvas.style.height = `${500 / ratio}px`
               ctx.scale(img.naturalWidth / width, img.naturalHeight / height)
             } else {
-              const width = 500 * ratio
-              const height = 500
               canvas.style.width = `${500 * ratio}px`
               canvas.style.height = '500px'
             }
