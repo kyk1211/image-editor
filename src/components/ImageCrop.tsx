@@ -1,24 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, MouseEvent } from 'react'
 import styled from 'styled-components'
-const MAX_CANVAS_WIDTH = 800
-const MAX_CANVAS_HEIGHT = 800
-
-const RIGHT_ANGLE = 5
-const STRAIGHT_ANGLE = 180
-const COMPLETE_ANGLE = 360
-
-const BLUR_FILTER = 'blur(10px)'
-
-const LEFT_CLICK = 1
-
-const HIGHEST_ENCODING_QUALITY = 1
-
-const INITIAL_AREA: BlurryArea = {
-  x: 0,
-  y: 0,
-  width: 0,
-  height: 0,
-}
 
 interface Size {
   width: number
@@ -28,251 +9,200 @@ interface Size {
 interface Rectangle extends Size {
   x: number
   y: number
+  rotate: number
 }
 
-interface BlurryArea extends Rectangle {
-  blurryImage?: ImageData
+const CANVAS_PADDING = 100
+const MODE: { [key: string]: 'none' | 'blur' | 'crop' | 'rotate' } = {
+  NONE: 'none',
+  BLUR: 'blur',
+  CROP: 'crop',
+  ROTATE: 'rotate',
 }
+// const ROTATE_ANGLE = 45
 
 export default function ImageCrop() {
+  const canvasWrapper = useRef<HTMLDivElement>(null)
   const blurLayer = useRef<HTMLCanvasElement>(null)
   const imageLayer = useRef<HTMLCanvasElement>(null)
   const dragLayer = useRef<HTMLCanvasElement>(null)
 
-  const [isRotateMode, setIsRotateMode] = useState(false)
-  const [isBlurMode, setIsBlurMode] = useState(false)
+  const [mode, setMode] = useState<'none' | 'blur' | 'crop' | 'rotate'>('none')
+  const [rotateAngle, setRotateAngle] = useState(0)
+  const [cropArea, setCropArea] = useState<Rectangle>({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    rotate: 0,
+  })
+  const [cropAreas, setCropAreas] = useState<Rectangle[]>([])
 
-  const [originFile, setOriginFile] = useState<File | null>(null)
-  const [originSize, setOriginSize] = useState<Size>({ width: 0, height: 0 })
+  const [blurArea, setBlurArea] = useState<Rectangle>({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    rotate: 0,
+  })
+  const [blurAreas, setBlurAreas] = useState<Rectangle[]>([])
+
+  const [dragStart, setDragStart] = useState(false)
+  const originFile = useRef<File | null>(null)
+  const originSize = useRef<Size>({ width: 0, height: 0 })
   const [imgSrc, setImgSrc] = useState('')
-  const [rotate, setRotate] = useState(0)
 
-  const [blurArea, setBlurArea] = useState<Rectangle>({ x: 0, y: 0, width: 0, height: 0 })
-  const [blurAreas, setBlurAreas] = useState<BlurryArea[]>([])
+  // const rotateCanvas = useCallback(() => {
+  //   const canvas = imageLayer.current
+  //   if (!canvas) return
+  //   const ctx = canvas.getContext('2d')
+  //   if (!ctx) return
+  //   const image = new Image()
+  //   image.onload = () => {
+  //     ctx.clearRect(0, 0, canvas.width, canvas.height)
+  //     ctx.translate(canvas.width / 2, canvas.height / 2)
+  //     ctx.rotate(((rotateAngle % 360) * Math.PI) / 180)
+  //     ctx.translate(-canvas.width / 2, -canvas.height / 2)
+  //     ctx.drawImage(image, 0, 0)
+  //   }
+  //   image.src = imgSrc
+  // }, [imgSrc, rotateAngle])
 
-  function createImageElement(source: string) {
-    const image = new Image()
-    image.src = source
-    return image
+  // useEffect(() => {
+  //   rotateCanvas()
+  // }, [rotateCanvas])
+
+  const handleMouseDown = (e: MouseEvent<HTMLCanvasElement>) => {
+    if (mode !== MODE.CROP) return
+    const rect = dragLayer.current!.getBoundingClientRect()
+    const { offsetX, offsetY } = e.nativeEvent
+    setDragStart(true)
+    setCropArea((prev) => {
+      return {
+        ...prev,
+        x: (offsetX * originSize.current.width) / rect.width,
+        y: (offsetY * originSize.current.height) / rect.height,
+        rotate: rotateAngle,
+      }
+    })
+    const ctx = dragLayer.current!.getContext('2d')
+    if (!ctx) return
   }
 
-  function resizeCanvas(canvas: HTMLCanvasElement | null, { width, height }: Size) {
-    if (canvas === null) return
-    ;[canvas.width, canvas.height] = [width, height]
+  const handleMouseMove = (e: MouseEvent<HTMLCanvasElement>) => {
+    if (mode !== MODE.CROP) return
+    if (!dragStart) return
+    const rect = dragLayer.current!.getBoundingClientRect()
+    const ctx = dragLayer.current!.getContext('2d')
+    if (!ctx) return
+    const { offsetX, offsetY } = e.nativeEvent
+
+    setCropArea((area) => ({
+      ...area,
+      width: (offsetX * originSize.current.width) / rect.width - area.x,
+      height: (offsetY * originSize.current.height) / rect.height - area.y,
+    }))
   }
 
-  function getRotatedCanvasSize({ width, height }: Size, rotationAngle: number): Size {
-    return {
-      width: rotationAngle % STRAIGHT_ANGLE ? height : width,
-      height: rotationAngle % STRAIGHT_ANGLE ? width : height,
-    }
+  const handleMouseUp = () => {
+    if (mode !== MODE.CROP) return
+    if (!dragStart) return
+    setDragStart(false)
+    setCropAreas((prev) => [...prev, cropArea])
+    setCropArea({
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      rotate: 0,
+    })
   }
-
-  function locateImage(image: HTMLImageElement, rotationAngle: number): Rectangle {
-    const canvasSize = getRotatedCanvasSize({ width: MAX_CANVAS_WIDTH, height: MAX_CANVAS_HEIGHT }, rotationAngle)
-    const isLongerWidth = image.width > image.height + (canvasSize.width - canvasSize.height)
-
-    const width = isLongerWidth ? canvasSize.width : (image.width * canvasSize.height) / image.height
-    const height = isLongerWidth ? (image.height * canvasSize.width) / image.width : canvasSize.height
-    const x = -Math.floor(rotationAngle / STRAIGHT_ANGLE) * width
-    const y = -Math.floor(((rotationAngle + RIGHT_ANGLE) % COMPLETE_ANGLE) / STRAIGHT_ANGLE) * height
-    return { x, y, width, height }
-  }
-  const drawImage = useCallback(() => {
-    const canvas = imageLayer.current as HTMLCanvasElement
-    if (canvas === null || imgSrc === '') return
-
-    const context = canvas.getContext('2d') as CanvasRenderingContext2D
-
-    const image = new Image()
-    image.src = imgSrc
-
-    image.onload = () => {
-      const { x, y, width, height } = locateImage(image, rotate)
-      const canvasSize = getRotatedCanvasSize({ width, height }, rotate)
-      resizeCanvas(canvas, canvasSize)
-      context.rotate(rotate * (Math.PI / 180))
-      context.drawImage(image, x, y, width, height)
-
-      blurAreas
-        .filter(({ blurryImage }) => blurryImage !== undefined)
-        .forEach(({ blurryImage, ...area }) => {
-          const left = area.width > 0 ? area.x : area.x + area.width
-          const top = area.height > 0 ? area.y : area.y + area.height
-          context?.putImageData(blurryImage as ImageData, left, top)
-        })
-      context.restore()
-    }
-  }, [blurAreas, imgSrc, rotate])
-
-  const blurImage = useCallback(() => {
-    const canvas = blurLayer.current as HTMLCanvasElement
-    if (canvas === null || imgSrc === '') return
-
-    const context = canvas.getContext('2d') as CanvasRenderingContext2D
-    const image = createImageElement(imgSrc)
-    image.onload = () => {
-      const { x, y, width, height } = locateImage(image, rotate)
-      const canvasSize = getRotatedCanvasSize({ width, height }, rotate)
-      resizeCanvas(canvas, canvasSize)
-      context.rotate((rotate * Math.PI) / 180)
-      context.filter = BLUR_FILTER
-      context.drawImage(image, x, y, width, height)
-      context.restore()
-    }
-  }, [imgSrc, rotate])
-
-  const drawDragLayer = useCallback(() => {
-    const canvas = dragLayer.current
-    if (canvas === null || imgSrc === '') return
-
-    const image = createImageElement(imgSrc)
-    image.onload = fitCanvasToImage
-
-    function fitCanvasToImage() {
-      const { width, height } = locateImage(image, rotate)
-      const canvasSize = getRotatedCanvasSize({ width, height }, rotate)
-      resizeCanvas(canvas, canvasSize)
-    }
-  }, [imgSrc, rotate])
 
   const drawDragArea = useCallback(() => {
     const canvas = dragLayer.current
     const context = canvas?.getContext('2d')
     if (canvas) context?.clearRect(0, 0, canvas.width, canvas.height)
-    if (context) context.fillStyle = 'rgba(255, 255, 255, 0.2)'
-    context?.fillRect(blurArea.x, blurArea.y, blurArea.width, blurArea.height)
-  }, [blurArea])
-
-  function handleMouseDown({ buttons, clientX, clientY }: MouseEvent<HTMLCanvasElement>) {
-    if (!isBlurMode) return
-    if (buttons !== LEFT_CLICK) return
-    const canvasPosition = dragLayer.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0)
-    setBlurArea({
-      ...INITIAL_AREA,
-      x: clientX - canvasPosition.x,
-      y: clientY - canvasPosition.y,
-    })
-  }
-
-  function handleMouseMove({ buttons, clientX, clientY }: MouseEvent<HTMLCanvasElement>) {
-    if (!isBlurMode) return
-    if (buttons !== LEFT_CLICK) return
-    const canvasPosition = dragLayer.current?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0)
-    setBlurArea((area) => ({
-      ...area,
-      width: clientX - area.x - canvasPosition.x,
-      height: clientY - area.y - canvasPosition.y,
-    }))
-  }
-
-  function handleMouseUp() {
-    if (!isBlurMode) return
-
-    const canvas = blurLayer.current
-    const context = canvas?.getContext('2d')
-    if (blurArea.width !== 0 && blurArea.height !== 0) {
-      setBlurAreas((areas) => [
-        ...areas,
-        {
-          ...blurArea,
-          blurryImage: context?.getImageData(blurArea.x, blurArea.y, blurArea.width, blurArea.height),
-        },
-      ])
-    }
-    setBlurArea(INITIAL_AREA)
-  }
-
-  function handleMouseLeave({ buttons }: MouseEvent<HTMLCanvasElement>) {
-    if (buttons !== LEFT_CLICK) return
-    handleMouseUp()
-  }
-
-  function handleClear() {
-    setBlurAreas([])
-    setRotate(0)
-    setIsBlurMode(false)
-    setIsRotateMode(false)
-    setImgSrc('')
-  }
-
-  function handleSave() {
-    const link = document.createElement('a')
-    link.download = ''
-
-    link.href = imgSrc
-    link.click()
-  }
-
-  function handleRotate() {
-    if (isRotateMode) {
-      setImgSrc(imageLayer.current?.toDataURL('image/png', HIGHEST_ENCODING_QUALITY) ?? '')
-      setRotate(0)
-    }
-    setIsRotateMode((rotationMode) => !rotationMode)
-  }
-  function handleRotateRight() {
-    setRotate((angle) => (angle + RIGHT_ANGLE) % COMPLETE_ANGLE)
-  }
-  function handleRotateLeft() {
-    setRotate((angle) => (angle + COMPLETE_ANGLE - RIGHT_ANGLE) % COMPLETE_ANGLE)
-  }
-
-  function handleBlur() {
-    if (isBlurMode) {
-      setImgSrc(imageLayer.current?.toDataURL('image/png', HIGHEST_ENCODING_QUALITY) ?? '')
-      setBlurAreas([])
-    }
-    setIsBlurMode((blurMode) => !blurMode)
-  }
-
-  function getCropImage() {
-    const canvas = document.createElement('canvas')
-    const context = canvas.getContext('2d')
-    if (context === null) return
-    const image = createImageElement(URL.createObjectURL(originFile!))
-    image.onload = () => {
-      const { x, y, width, height } = locateImage(image, rotate)
-      const canvasSize = getRotatedCanvasSize({ width, height }, rotate)
-      resizeCanvas(canvas, canvasSize)
-      context.rotate((rotate * Math.PI) / 180)
-      context.drawImage(image, x, y, width, height)
-      context.restore()
-      const cropImage = canvas.toDataURL('image/png', HIGHEST_ENCODING_QUALITY)
-      setImgSrc(cropImage)
-    }
-  }
-
-  useEffect(() => {
-    drawImage()
-  }, [drawImage])
-
-  useEffect(() => {
-    blurImage()
-  }, [blurImage])
-
-  useEffect(() => {
-    drawDragLayer()
-  }, [drawDragLayer])
+    if (!context) return
+    context.lineWidth = 2
+    context.fillStyle = 'rgba(200, 200, 200, 0.8)'
+    context?.strokeRect(cropArea.x, cropArea.y, cropArea.width, cropArea.height)
+    context.fillStyle = 'rgba(200,200,200, 0.5)'
+    context.fillRect(cropArea.x, cropArea.y, cropArea.width, cropArea.height)
+  }, [cropArea])
 
   useEffect(() => {
     drawDragArea()
   }, [drawDragArea])
 
+  useEffect(() => {
+    cropAreas.forEach((area) => {
+      const context = dragLayer.current?.getContext('2d')
+      if (!context) return
+      context.lineWidth = 2
+      context.fillStyle = 'rgba(200, 200, 200, 0.8)'
+      context?.strokeRect(area.x, area.y, area.width, area.height)
+      context.fillStyle = 'rgba(200,200,200, 0.5)'
+      context.fillRect(area.x, area.y, area.width, area.height)
+    })
+  }, [cropAreas])
+
+  // 이미지 캔버스에 그리는 useEffect
+  useEffect(() => {
+    const image = new Image()
+    image.onload = () => {
+      if (!imageLayer.current) return
+      if (!blurLayer.current) return
+      if (!dragLayer.current) return
+      const ctx = imageLayer.current.getContext('2d')
+      if (!ctx) return
+      const ctx2 = blurLayer.current.getContext('2d')
+      if (!ctx2) return
+      const ctx3 = dragLayer.current.getContext('2d')
+      if (!ctx3) return
+      ctx.clearRect(0, 0, imageLayer.current.width, imageLayer.current.height)
+      ctx2.clearRect(0, 0, blurLayer.current.width, blurLayer.current.height)
+      ctx3.clearRect(0, 0, dragLayer.current.width, dragLayer.current.height)
+      imageLayer.current.width = image.naturalWidth
+      imageLayer.current.height = image.naturalHeight
+      blurLayer.current.width = image.naturalWidth
+      blurLayer.current.height = image.naturalHeight
+      dragLayer.current.width = image.naturalWidth
+      dragLayer.current.height = image.naturalHeight
+      originSize.current = { width: image.naturalWidth, height: image.naturalHeight }
+
+      const isWidthLonger = image.naturalWidth > image.naturalHeight
+      const ratio = image.naturalWidth / image.naturalHeight
+      // const diagonal = Math.sqrt(image.naturalWidth ** 2 + image.naturalHeight ** 2)
+      const width = canvasWrapper.current!.clientWidth - CANVAS_PADDING * 2
+      const height = canvasWrapper.current!.clientHeight - CANVAS_PADDING * 2
+      imageLayer.current.style.width = `${isWidthLonger ? width : width * ratio}px`
+      imageLayer.current.style.height = `${isWidthLonger ? height / ratio : width}px`
+
+      blurLayer.current.style.width = `${isWidthLonger ? width : width * ratio}px`
+      blurLayer.current.style.height = `${isWidthLonger ? height / ratio : width}px`
+
+      dragLayer.current.style.width = `${isWidthLonger ? width : width * ratio}px`
+      dragLayer.current.style.height = `${isWidthLonger ? height / ratio : width}px`
+      ctx.drawImage(image, 0, 0)
+    }
+    image.src = imgSrc
+  }, [imgSrc])
+
   return (
     <>
       <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Container>
+        <Container ref={canvasWrapper}>
           {imgSrc ? (
             <>
-              <Canvas ref={blurLayer} />
-              <Canvas ref={imageLayer} />
+              <Canvas ref={blurLayer} rotate={rotateAngle} />
+              <Canvas ref={imageLayer} rotate={rotateAngle} />
               <Canvas
+                rotate={rotateAngle}
                 ref={dragLayer}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseLeave}
+                onMouseLeave={handleMouseUp}
               />
             </>
           ) : (
@@ -281,42 +211,88 @@ export default function ImageCrop() {
               accept="image/*"
               onChange={(e) => {
                 if (e.target.files === null) return
-                setOriginFile(e.target.files?.[0])
-                setImgSrc(URL.createObjectURL(e.target.files?.[0]))
-                const image = createImageElement(URL.createObjectURL(e.target.files?.[0]))
-                image.onload = () => {
-                  setOriginSize({ width: image.naturalWidth, height: image.naturalHeight })
-                }
+                originFile.current = e.target.files[0]
+                const imgUrl = URL.createObjectURL(e.target.files?.[0])
+                setImgSrc(imgUrl)
               }}
             />
           )}
         </Container>
       </div>
       <div>
-        <button
+        {/* <button
           onClick={() => {
-            handleRotate()
+            setMode((prev) => {
+              if (prev === MODE.ROTATE) {
+                return MODE.NONE
+              }
+              return MODE.ROTATE
+            })
           }}
         >
           Rotate
         </button>
         <button
+          disabled={mode !== MODE.ROTATE}
           onClick={() => {
-            handleBlur()
+            setRotateAngle((prev) => (prev - ROTATE_ANGLE) % 360)
+          }}
+        >
+          {'<'}
+        </button>
+        <button
+          disabled={mode !== MODE.ROTATE}
+          onClick={() => {
+            setRotateAngle((prev) => (prev + ROTATE_ANGLE) % 360)
+          }}
+        >
+          {'>'}
+        </button> */}
+        <button
+          disabled={originFile.current === null}
+          onClick={() => {
+            setMode((prev) => {
+              if (prev === MODE.BLUR) {
+                return MODE.NONE
+              }
+              return MODE.BLUR
+            })
           }}
         >
           blur
         </button>
-        <button onClick={handleRotateLeft} disabled={!isRotateMode}>
-          {'<'}
-        </button>
-        <button onClick={handleRotateRight} disabled={!isRotateMode}>
-          {'>'}
+        <button
+          disabled={originFile.current === null}
+          onClick={() => {
+            setMode((prev) => {
+              if (prev === MODE.CROP) {
+                return MODE.NONE
+              }
+              return MODE.CROP
+            })
+          }}
+        >
+          crop
         </button>
         <button
           onClick={() => {
-            handleSave()
+            const canvas = imageLayer.current
+            if (!canvas) return
+            const ctx = canvas.getContext('2d')
+            if (!ctx) return
+            cropAreas.map((area) => {
+              const resultCanvas = document.createElement('canvas')
+              resultCanvas.width = area.width
+              resultCanvas.height = area.height
+              const resultCtx = resultCanvas.getContext('2d')
+              resultCtx!.drawImage(canvas, area.x, area.y, area.width, area.height, 0, 0, area.width, area.height)
+              const link = document.createElement('a')
+              link.download = 'image.png'
+              link.href = resultCanvas.toDataURL('image/png')
+              link.click()
+            })
           }}
+          disabled={mode !== MODE.NONE || originFile.current === null}
         >
           save
         </button>
@@ -328,13 +304,15 @@ export default function ImageCrop() {
 const Container = styled.div`
   width: 900px;
   height: 900px;
+  padding: ${CANVAS_PADDING}px;
   position: relative;
   background-color: #f5f5f5;
 `
 
-const Canvas = styled.canvas`
+const Canvas = styled.canvas<{ rotate: number }>`
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) rotate(${(props) => props.rotate}deg);
+  border: 1px solid black;
 `
