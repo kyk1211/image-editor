@@ -32,8 +32,11 @@ const INIT_RECTANGLE: Rectangle = {
 
 export default function ImageCrop() {
   const canvasWrapper = useRef<HTMLDivElement>(null)
-  const blurLayer = useRef<HTMLCanvasElement>(null)
+
+  const blurCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas'))
+
   const imageLayer = useRef<HTMLCanvasElement>(null)
+  const blurLayer = useRef<HTMLCanvasElement>(null)
   const dragLayer = useRef<HTMLCanvasElement>(null)
 
   const [mode, setMode] = useState<'none' | 'blur' | 'crop' | 'rotate'>('none')
@@ -121,14 +124,14 @@ export default function ImageCrop() {
     if (mode === MODE.NONE) return
     setDragStart(false)
     if (mode === MODE.CROP) {
-      if (cropArea.width !== 0) {
+      if (cropArea.width !== 0 && cropArea.height !== 0) {
         setCropAreas((prev) => [...prev, cropArea])
       }
       setCropArea(INIT_RECTANGLE)
       return
     }
     if (mode === MODE.BLUR) {
-      if (blurArea.width !== 0) {
+      if (blurArea.width !== 0 && blurArea.height !== 0) {
         setBlurAreas((prev) => [...prev, blurArea])
       }
       setBlurArea(INIT_RECTANGLE)
@@ -173,26 +176,32 @@ export default function ImageCrop() {
   }, [drawCropArea])
 
   useEffect(() => {
+    const context = dragLayer.current?.getContext('2d')
+    if (!context) return
+    context.clearRect(0, 0, dragLayer.current!.width, dragLayer.current!.height)
     cropAreas.forEach((area) => {
-      const context = dragLayer.current?.getContext('2d')
-      if (!context) return
+      context.save()
       context.lineWidth = 2
       context.fillStyle = 'rgba(200, 200, 200, 0.8)'
       context?.strokeRect(area.x, area.y, area.width, area.height)
       context.fillStyle = 'rgba(200,200,200, 0.5)'
       context.fillRect(area.x, area.y, area.width, area.height)
+      context.restore()
     })
   }, [cropAreas])
 
   useEffect(() => {
-    const blurContext = blurLayer.current?.getContext('2d')
+    const blurContext = blurCanvas.current?.getContext('2d')
+    const blurLayerContext = blurLayer.current?.getContext('2d')
     const context = imageLayer.current?.getContext('2d')
     if (!blurContext) return
+    if (!blurLayerContext) return
     if (!context) return
+    blurLayerContext.clearRect(0, 0, imageLayer.current!.width, imageLayer.current!.height)
     blurAreas.forEach((area) => {
       const { x, y, width, height } = area
       const imgData = blurContext.getImageData(x, y, width, height)
-      context.putImageData(imgData, x, y)
+      blurLayerContext.putImageData(imgData, x, y)
     })
   }, [blurAreas])
 
@@ -200,40 +209,58 @@ export default function ImageCrop() {
   useEffect(() => {
     const image = new Image()
     image.onload = () => {
+      if (!blurCanvas.current) return
       if (!imageLayer.current) return
-      if (!blurLayer.current) return
       if (!dragLayer.current) return
+      if (!blurLayer.current) return
+
       const ctx = imageLayer.current.getContext('2d')
-      const ctx2 = blurLayer.current.getContext('2d')
+      const ctx2 = blurCanvas.current.getContext('2d')
       const ctx3 = dragLayer.current.getContext('2d')
+      const ctx4 = blurLayer.current.getContext('2d')
+
       if (!ctx) return
       if (!ctx2) return
       if (!ctx3) return
+      if (!ctx4) return
+
       ctx.clearRect(0, 0, imageLayer.current.width, imageLayer.current.height)
-      ctx2.clearRect(0, 0, blurLayer.current.width, blurLayer.current.height)
+      ctx2.clearRect(0, 0, blurCanvas.current.width, blurCanvas.current.height)
       ctx3.clearRect(0, 0, dragLayer.current.width, dragLayer.current.height)
+      ctx4.clearRect(0, 0, blurLayer.current.width, blurLayer.current.height)
+
       imageLayer.current.width = image.naturalWidth
       imageLayer.current.height = image.naturalHeight
-      blurLayer.current.width = image.naturalWidth
-      blurLayer.current.height = image.naturalHeight
+
+      blurCanvas.current.width = image.naturalWidth
+      blurCanvas.current.height = image.naturalHeight
       ctx2.filter = 'blur(25px)'
+
       dragLayer.current.width = image.naturalWidth
       dragLayer.current.height = image.naturalHeight
+
+      blurLayer.current.width = image.naturalWidth
+      blurLayer.current.height = image.naturalHeight
+      ctx4.filter = 'blur(25px)'
+
       originSize.current = { width: image.naturalWidth, height: image.naturalHeight }
 
       const isWidthLonger = image.naturalWidth > image.naturalHeight
       const ratio = image.naturalWidth / image.naturalHeight
-      // const diagonal = Math.sqrt(image.naturalWidth ** 2 + image.naturalHeight ** 2)
       const width = canvasWrapper.current!.clientWidth - CANVAS_PADDING * 2
       const height = canvasWrapper.current!.clientHeight - CANVAS_PADDING * 2
       imageLayer.current.style.width = `${isWidthLonger ? width : width * ratio}px`
       imageLayer.current.style.height = `${isWidthLonger ? height / ratio : width}px`
+
+      blurCanvas.current.style.width = `${isWidthLonger ? width : width * ratio}px`
+      blurCanvas.current.style.height = `${isWidthLonger ? height / ratio : width}px`
 
       blurLayer.current.style.width = `${isWidthLonger ? width : width * ratio}px`
       blurLayer.current.style.height = `${isWidthLonger ? height / ratio : width}px`
 
       dragLayer.current.style.width = `${isWidthLonger ? width : width * ratio}px`
       dragLayer.current.style.height = `${isWidthLonger ? height / ratio : width}px`
+
       ctx.drawImage(image, 0, 0)
       ctx2.drawImage(image, 0, 0)
     }
@@ -246,8 +273,8 @@ export default function ImageCrop() {
         <Container ref={canvasWrapper}>
           {imgSrc ? (
             <>
-              <Canvas ref={blurLayer} rotate={rotateAngle} />
               <Canvas ref={imageLayer} rotate={rotateAngle} />
+              <Canvas ref={blurLayer} rotate={rotateAngle} />
               <Canvas
                 rotate={rotateAngle}
                 ref={dragLayer}
@@ -308,12 +335,54 @@ export default function ImageCrop() {
           crop
         </button>
         <button
+          disabled={
+            mode === MODE.NONE ||
+            (mode === MODE.BLUR && blurAreas.length === 0) ||
+            (mode === MODE.CROP && cropAreas.length === 0)
+          }
+          onClick={() => {
+            if (mode === MODE.NONE) return
+            if (mode === MODE.BLUR) {
+              setBlurAreas((prev) => {
+                const newBlurAreas = [...prev]
+                newBlurAreas.pop()
+                return newBlurAreas
+              })
+              return
+            }
+            if (mode === MODE.CROP) {
+              setCropAreas((prev) => {
+                const newCropAreas = [...prev]
+                newCropAreas.pop()
+                return newCropAreas
+              })
+              return
+            }
+          }}
+        >
+          back
+        </button>
+        <button
           onClick={() => {
             const canvas = imageLayer.current
+            const blurCanvas = blurLayer.current
             if (!canvas) return
+            if (!blurCanvas) return
             const ctx = canvas.getContext('2d')
+            const ctx2 = blurCanvas.getContext('2d')
             if (!ctx) return
-            cropAreas.map((area) => {
+            if (!ctx2) return
+            blurAreas.forEach((area) => {
+              const { x, y, width, height } = area
+              const resultCanvas = document.createElement('canvas')
+              resultCanvas.width = width
+              resultCanvas.height = height
+              const resultCtx = resultCanvas.getContext('2d')
+              if (!resultCtx) return
+              resultCtx.drawImage(blurCanvas, x, y, width, height, 0, 0, width, height)
+              ctx.putImageData(resultCtx.getImageData(0, 0, width, height), x, y)
+            })
+            cropAreas.forEach((area) => {
               const resultCanvas = document.createElement('canvas')
               resultCanvas.width = area.width
               resultCanvas.height = area.height
